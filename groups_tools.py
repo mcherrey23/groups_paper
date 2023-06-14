@@ -10,6 +10,9 @@ from astropy.cosmology import Planck15
 from astropy.cosmology import WMAP9 as cosmo
 import scipy.special as special
 import matplotlib.backends.backend_pdf
+from scipy.optimize import minimize
+from scipy import integrate
+import math
 
 
 # GLOBAL VARIABLEs
@@ -351,7 +354,7 @@ def recompute_barycenters(G, R):
 def calc_mass(R, G, N_lim = 5):
 	"""
 	This function estimates the Mass of galaxy groups by using the speed distribution method.
-	The Mass is given by the formula: M = 6*R*Vlos²/G
+	The Mass is given by the formula: M = 5*R*Vlos²/G
 	It takes as input a DataFrame with all the galaxies and their corresponding group
 	N_lim is the minimum number of galaxies per group to perform the mass computation.
 	It returns a copy of the input DataFrame with a new column "M_vel_disp" and a new column "Radius_kpc"
@@ -456,8 +459,8 @@ def calc_mass(R, G, N_lim = 5):
 				# the errors:
 				sigma_err = sigma_error(sigma, N) # in m/s
 				#Mvir_sigma2_error = 12*sigma_v*r*sigma_err/(const.G * const.M_sun)
-				Mvir_sigma2_error = 2 * Mvir_sigma2 * sigma_err / sigma
-				Mvir_sigma3_error = 3 * Mvir_sigma3 * sigma_err / sigma
+				Mvir_sigma2_error = 2 * Mvir_sigma2 * sigma_err / sigma # This is all 1-sigma error
+				Mvir_sigma3_error = 3 * Mvir_sigma3 * sigma_err / sigma # This is all 1-sigma error
 				Rvir_sigma2_error = Rvir_sigma2 * Mvir_sigma2_error / Mvir_sigma2 /3
 				Rvir_sigma3_error = Rvir_sigma3 * Mvir_sigma3_error / Mvir_sigma3 /3
 
@@ -669,7 +672,7 @@ def match_qso(df, fields_info):
 	
 	return df
 	
-def match_absorptions(G, Abs, dv = 1e6):
+def match_absorptions(G1, Abs, dv = 1e6):
 	"""
 	match the Abs dataframe describing the absorptions with the G dataframe describing the groups.
 	
@@ -677,7 +680,7 @@ def match_absorptions(G, Abs, dv = 1e6):
 	"""
 
 	pd.options.mode.chained_assignment = None
-	
+	G = G1.copy()
 	#G_energy["field"] = G_energy["field_id"].str.slice(2,12)
 	G["REW_2796"] = 0
 	G["sig_REW_2796"] = 0
@@ -770,22 +773,31 @@ def get_N100_abs(Abs, R, dv = 1e6):
 	Abs["N100_abs"] = np.array(N100)
 	return Abs
 	
-def get_Nxxx_abs(Abs, R, bmax = 100, dv = 1e6):
+def get_Nxxx_abs(Abs, R, bmax = 100, dv = 0.5e6):
 	"""
 	Get the number of galaxies in a 100kpc radius around the QSO LOS for each absorber.
 	
 	dv: maximum velocity difference between the absorption and the galaxies taken into account.
 	"""
 	Nxxx = []
-	for i, absorption in Abs.iterrows():
+	bmin = []
+	Abs2 = Abs.copy()
+	#print("tototototo ", dv)
+	for i, absorption in Abs2.iterrows():
 		f1 = np.abs(R["Z"] - absorption["z_abs"])*const.c.value/(1+absorption["z_abs"])<dv
 		f2 = R["field_id"] == absorption["field_name"]
 		f3 = R["B_KPC"]< bmax
 		F = R[f1 & f2 & f3]
+		F["dv_abs"] = np.abs(F["Z"] - absorption["z_abs"])*const.c.value/(1+absorption["z_abs"])
+		#print(absorption["field_name"], absorption["z_abs"], F[["ID","Z", "dv_abs"]])
 		Nxxx.append(len(F))
-	colname = "N"+str(bmax)+"_abs"
-	Abs[colname] = np.array(Nxxx)
-	return Abs
+		bmin.append(np.min(F["B_KPC"]))
+		#print(Nxxx)
+	colname_N= "N"+str(bmax)+"_abs"
+	colname_b = "bmin"+str(bmax)+"_abs"
+	Abs2[colname_N] = np.array(Nxxx)
+	Abs2[colname_b] = np.array(bmin)
+	return Abs2
 
 def get_Nxxx_abs_test(Abs, R, bmax = 100, dv = 1e6):
 	"""
@@ -1884,7 +1896,6 @@ def group_iterative_2(g, r):
 		ra_center =  g["mean_ra"]*u.degree
 		dec_center = g["mean_dec"]*u.degree
 
-
     # We compute the distance and velocity relatively to the group center:
 	c1 = SkyCoord(r["RA"]*u.degree, r["DEC"]*u.degree)
 	c2 = SkyCoord(ra_center, dec_center)
@@ -2203,3 +2214,101 @@ def NFW_escape_vel_from_Mvir(r, Mvir, z=0,
                           CvirorRs=cvir,
                           Rvir=rvir,
                           truncated=truncated)
+
+
+def calc_sigma_intrisic(yi, modeled_yi, sigma_mi):
+    """
+    compute the intrisic scatter from the comparison between data and model.
+    It must be used iteratively until convergence to an intrisic scatter value.
+    """
+
+    
+    mean_residual = np.mean(yi-modeled_yi)
+    
+    intrisic_i = (yi - modeled_yi - mean_residual)**2 - sigma_mi**2
+    sigma_intri = np.median(intrisic_i)
+    
+    #print("yi = ", yi)
+    #print("modeled_yi = ", modeled_yi)
+    #print("sigma_mi = ", sigma_mi)
+    #print("mean_residual = ", mean_residual)
+    #print("sigma_intrisic = ", sigma_intri**0.5)
+    
+    return sigma_intri**0.5
+
+
+def model(param, x):
+    # y = ax +b
+    return param[0] + param[1]*x
+
+
+def logL_Hogg_total(param, x1, y1, sig_x1, sig_y1, x2, y2, sig_x2, sig_y2):
+    theta = np.arctan(param[1])
+    #print(sig_y1[0])
+    N1 = len(x1)
+    LL = 0
+    
+    for i in range(N1):
+        xi = x1[i]
+        yi = y1[i]
+        sig_xi = sig_x1[i]
+        sig_yi = sig_y1[i]
+        Deltai_2 = (-np.sin(theta)*xi + np.cos(theta)*yi - np.cos(theta)*param[0])**2
+        Sigmai_2 = (np.sin(theta))**2*sig_xi**2 + (np.cos(theta))**2*sig_yi**2
+        LL += -Deltai_2/Sigmai_2/2
+        
+    N2 = len(x2)
+    for i in range(N2):
+        xi = x2[i]
+        yi = y2[i]
+        sig_xi = sig_x2[i]
+        sig_yi = sig_y2[i]
+        Deltai_2 = (-np.sin(theta)*xi + np.cos(theta)*yi - np.cos(theta)*param[0])**2
+        Sigmai_2 = (np.sin(theta))**2*sig_xi**2 + (np.cos(theta))**2*sig_yi**2
+        X = -(Deltai_2/Sigmai_2/2)**0.5
+        I = 0.5*(1 + math.erf(X))
+        LL += np.log(I)    
+    return -LL
+
+
+
+def fit_REW(G5, x1, y1, sig_x1, sig_y1, x2, y2, sig_x2, sig_y2, sig_y_noabs = 0.3, Niter = 5, init_param = np.array([0,-0.015])):
+    """
+    
+    """
+    
+    G5_abs = G5[G5["bool_absorption"] == 1]
+    G5_noabs = G5[G5["bool_absorption"] == 0]
+
+    N = 5
+    sigma_intrinsic_start = 0
+    sigma_intrinsic = sigma_intrinsic_start
+    sigma_intrisic_list = [sigma_intrinsic]
+    for i in range(Niter):
+        print("N = ", i)
+        sig_y1_mi = np.array(G5_abs["sig_REW_2796"]/G5_abs["REW_2796"])
+        sig_y1 = (sig_y1_mi**2 + sigma_intrinsic**2)**0.5
+        LL_model_Hogg_total = minimize(logL_Hogg_total, init_param, \
+                                       args = (x1, y1, sig_x1, sig_y1, x2, y2, sig_x2, sig_y2), method='BFGS')
+        sigma_intrinsic = calc_sigma_intrisic(y1, model(LL_model_Hogg_total['x'], x1), sig_y1_mi)
+        print(sigma_intrinsic)
+        sigma_intrisic_list.append(sigma_intrinsic)
+        
+    plt.plot(sigma_intrisic_list)
+    
+    return LL_model_Hogg_total, sigma_intrisic_list
+
+
+#--------------------------------------
+def Tinker_2008(b):
+    """
+    theoretical profile for a halo of mass 1e12 at z = 0.6. Values are not correct. Just to see the shape...
+    """
+    A = 60
+    M = 1e12
+    Rg = 50
+    ah = 0.2*Rg
+    G0 = 1
+    W = A*G0/((b**2 + ah**2)**0.5)*np.arctan(((Rg**2-b**2)/b**2 + ah**2)**0.5)
+    return W
+
