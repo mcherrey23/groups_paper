@@ -255,6 +255,67 @@ def recompute_centers_new(G, R):
 			G.loc[i, "center_z_err"] = np.abs(z_err_sum)
 	return G
 
+
+
+def recompute_centers_heaviest(G, R):
+
+	G["center_ra"] = np.nan
+	G["center_dec"] = np.nan
+	G["center_z"] = np.nan
+
+	for i, g in G.iterrows():
+		r = R[R["group_id"] == g["group_id"]]
+		r = r.sort_values(by = "mass10", ascending = False)
+
+        # we define the heaviest galaxy as the center of the group i
+        # if the mass ratio between the 2 heaviest galaxies is above 1.5:
+		center = r[:1].squeeze()
+		#print(len(r))
+		G.loc[i, "center_ra"] = center["RA"]
+		G.loc[i, "center_dec"] = center["DEC"]
+		G.loc[i, "center_z"] = center["Z"]
+		G.loc[i, "center_ra_err"] = 0
+		G.loc[i, "center_dec_err"] = 0
+		G.loc[i, "center_z_err"] = 0
+		print("center z = ", center["Z"])
+		"""
+		if np.isnan(g["center_z"]):
+			print("NO CENTER !!!")
+			r = r[~np.isnan(r["mass10"])]
+
+			center_ra = (r["mass10"] * r["RA"]).sum() / (r["mass10"].sum())
+			center_dec = (r["mass10"] * r["DEC"]).sum() / (r["mass10"].sum())
+			center_z = (r["mass10"] * r["Z"]).sum() / (r["mass10"].sum())
+
+			sum_mi = r["mass10"].sum()
+			sum_ra = r["RA"].sum()
+			sum_dec = r["DEC"].sum()
+			sum_mirai = (r["RA"] * r["mass10"]).sum()
+			sum_mideci = (r["DEC"] * r["mass10"]).sum()
+			sum_mizi = (r["Z"] * r["mass10"]).sum()
+
+			ra_err = (r["RA"] * sum_mi - sum_mirai) * r["mass10_err"]
+			ra_err = ra_err / (sum_mi ** 2)
+			ra_err_sum = ra_err.sum()
+			dec_err = (r["DEC"] * sum_mi - sum_mideci) * r["mass10_err"]
+			dec_err = dec_err / (sum_mi ** 2)
+			dec_err_sum = dec_err.sum()
+			z_err = (r["Z"] * sum_mi - sum_mizi) * r["mass10_err"]
+			z_err = z_err / (sum_mi ** 2)
+			z_err_sum = z_err.sum()
+
+			G.loc[i, "center_ra"] = center_ra
+			G.loc[i, "center_dec"] = center_dec
+			G.loc[i, "center_z"] = center_z
+
+			G.loc[i, "center_ra_err"] = np.abs(ra_err_sum)
+			G.loc[i, "center_dec_err"] = np.abs(dec_err_sum)
+			G.loc[i, "center_z_err"] = np.abs(z_err_sum)
+            """
+	return G
+
+
+
 def recompute_centers_2(G, R):
 
 
@@ -1464,8 +1525,8 @@ def plot_groups_2(R, G, Nmin = 5, save = False,  filename = "none", dv = 1e6):
 
 		df_filt = df[df["outlier"] == False]
 		df_out = df[df["outlier"] == True]
-
-
+		df_passive = df[df["passive"] == True]
+        
 		ra = np.array(ra)
 		dec = np.array(dec)
 		vlos = np.array(vlos)
@@ -1492,10 +1553,14 @@ def plot_groups_2(R, G, Nmin = 5, save = False,  filename = "none", dv = 1e6):
 		circle = plt.Circle((0,0),r100, fill = False, ec="green")
 		plt.gca().add_patch(circle)
 		plt.scatter((df["RA"] - ra_qso.value)*3600, (df["DEC"] - dec_qso.value)*3600, \
-					c = "blue", marker = "s", s = 50, vmin = 0, vmax = 1)
+					c = "blue", marker = "s", s = 50)
+		plt.scatter((df_passive["RA"] - ra_qso.value)*3600, (df_passive["DEC"] - dec_qso.value)*3600, \
+					c = "blue", marker = "s", s = 50)
 		if "Psat" in df.columns:
 			plt.scatter((df["RA"] - ra_qso.value)*3600, (df["DEC"] - dec_qso.value)*3600, \
-						c = "blue", s = np.minimum(df['mass10']/1e8 + 80, 500), vmin = 0, vmax = 1)
+						c = "blue", s = np.minimum(df['mass10']/1e8 + 80, 500))
+			plt.scatter((df_passive["RA"] - ra_qso.value)*3600, (df_passive["DEC"] - dec_qso.value)*3600, \
+						c = "red", s = np.minimum(df_passive['mass10']/1e8 + 80, 500))
 			#plt.colorbar(label = "Psat")	
 		else:
 			plt.scatter((df["RA"] - ra_qso.value)*3600, (df["DEC"] - dec_qso.value)*3600, \
@@ -1522,10 +1587,14 @@ def plot_groups_2(R, G, Nmin = 5, save = False,  filename = "none", dv = 1e6):
 		plt.subplot(N,3,3*k-1)
 		plt.title(title, pad = 10)
 		plt.scatter(df["r_to_gcenter"], df["vlos_to_gcenter"], \
-					c = "blue", marker = "s", s = 50, vmin = 0, vmax = 1)
+					c = "blue", marker = "s", s = 50)
+		plt.scatter(df_passive["r_to_gcenter"], df_passive["vlos_to_gcenter"], \
+					c = "red", marker = "s", s = 50)
 		if "Psat" in df.columns:
 			plt.scatter(df["r_to_gcenter"], df["vlos_to_gcenter"], \
-					c = "blue", vmin = 0, vmax = 1, s = np.minimum(df['mass10']/1e8 + 80,500))
+					c = "blue", s = np.minimum(df['mass10']/1e8 + 80,500))
+			plt.scatter(df_passive["r_to_gcenter"], df_passive["vlos_to_gcenter"], \
+					c = "red", s = np.minimum(df_passive['mass10']/1e8 + 80,500))
 			#cbar = plt.colorbar(label =	 "Psat")
 		else:
 			plt.scatter(df["r_to_gcenter"], df["vlos_to_gcenter"], \
@@ -2312,3 +2381,13 @@ def Tinker_2008(b):
     W = A*G0/((b**2 + ah**2)**0.5)*np.arctan(((Rg**2-b**2)/b**2 + ah**2)**0.5)
     return W
 
+#-----------------------------------------
+
+def SFR_Gilbank(logMstar, LOII):
+    a = -1.424
+    b = 9.827
+    c = 0.572
+    d = 1.7
+    lnorm = 3.8e40
+    SFR = LOII/lnorm/(a*np.tanh((logMstar-b)/c)+d)
+    return SFR
